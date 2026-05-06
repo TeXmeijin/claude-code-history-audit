@@ -1,0 +1,12 @@
+.claude/
+.DS_Store
+node_modules/
+
+# Local artifacts from earlier evaluation runs. Safe to delete; kept ignored
+# in case the directories still exist on a contributor's clone.
+.agentshield/
+.local-fixtures/
+.ship-safe/
+reports/
+generated/
+ship-safe-report.html

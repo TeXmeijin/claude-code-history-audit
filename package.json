@@ -1,0 +1,13 @@
+{
+  "name": "claude-history-audit",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Audit and redact secret-like strings in Claude Code history JSONL files.",
+  "scripts": {
+    "history:audit": "bash scripts/audit-claude-history-for-project.sh",
+    "history:audit:fast": "bash scripts/audit-claude-history-for-project.sh --latest 20 --summary-only",
+    "history:audit:summary": "bash scripts/audit-claude-history-for-project.sh --summary-only",
+    "history:redact:dry-run": "bash scripts/redact-claude-history-secrets.sh",
+    "history:redact:apply": "bash scripts/redact-claude-history-secrets.sh --apply"
+  }
+}
