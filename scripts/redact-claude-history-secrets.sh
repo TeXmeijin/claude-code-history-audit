@@ -374,10 +374,18 @@ sub preview_text {
   $line =~ s/sk-proj-[A-Za-z0-9_-]{20,}/<OPENAI_KEY>/g;
   $line =~ s/\bsk-[A-Za-z0-9]{32,}\b/<OPENAI_KEY>/g;
   $line =~ s/\b[rs]k_(live|test)_[A-Za-z0-9]{20,}\b/<STRIPE_KEY>/g;
+  my $had_aws_access_key_id = ($line =~ /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/);
   $line =~ s/\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/<AWS_ACCESS_KEY_ID>/g;
   $line =~ s/\bAIza[0-9A-Za-z_-]{35}\b/<GOOGLE_API_KEY>/g;
   $line =~ s/\bxox[baprs]-[0-9A-Za-z-]{20,}\b/<SLACK_TOKEN>/g;
   $line =~ s/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/<JWT>/g;
+  $line =~ s{(\b(?:aws[_-]?secret[_-]?access[_-]?key|aws[_-]?secret[_-]?key)\b[\s"':=\\]{1,8})([A-Za-z0-9/+]{40})(?![A-Za-z0-9/+=])}{$1<AWS_SECRET_ACCESS_KEY>}gi;
+  if ($had_aws_access_key_id) {
+    $line =~ s{(?<![A-Za-z0-9/+])([A-Za-z0-9/+]{40})(?![A-Za-z0-9/+=])}{
+      my $candidate = $1;
+      $candidate =~ /^[a-f0-9]{40}$/ ? $candidate : '<AWS_SECRET_ACCESS_KEY>';
+    }ge;
+  }
   $line =~ s#\b((?:postgres|postgresql|mysql|mongodb(?:\+srv)?|redis)://)[^/\s:@]+:[^@\s/]+@#$1<DB_CREDENTIALS>@#g;
   $line =~ s/-----BEGIN (?:RSA |EC |OPENSSH |DSA |)?PRIVATE KEY-----.*?-----END (?:RSA |EC |OPENSSH |DSA |)?PRIVATE KEY-----/<PRIVATE_KEY_BLOCK>/g;
   return length($line) > 360 ? substr($line, 0, 360) . '...' : $line;
@@ -387,6 +395,8 @@ sub redact_line {
   my ($line) = @_;
   my %rules;
   my $changed = 0;
+
+  my $had_aws_access_key_id = ($line =~ /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/);
 
   my @replacements = (
     [github_fine_grained_token => qr/\bgithub_pat_[A-Za-z0-9_]{20,}\b/, '<GITHUB_FINE_GRAINED_TOKEN>'],
@@ -409,6 +419,33 @@ sub redact_line {
     if ($count > 0) {
       $rules{$name} += $count;
       $changed += $count;
+    }
+  }
+
+  my $sak_a_count = 0;
+  $line =~ s{(\b(?:aws[_-]?secret[_-]?access[_-]?key|aws[_-]?secret[_-]?key)\b[\s"':=\\]{1,8})([A-Za-z0-9/+]{40})(?![A-Za-z0-9/+=])}{
+    $sak_a_count++;
+    "$1<AWS_SECRET_ACCESS_KEY>";
+  }gei;
+  if ($sak_a_count > 0) {
+    $rules{aws_secret_access_key} += $sak_a_count;
+    $changed += $sak_a_count;
+  }
+
+  if ($had_aws_access_key_id) {
+    my $sak_b_count = 0;
+    $line =~ s{(?<![A-Za-z0-9/+])([A-Za-z0-9/+]{40})(?![A-Za-z0-9/+=])}{
+      my $candidate = $1;
+      if ($candidate =~ /^[a-f0-9]{40}$/) {
+        $candidate;
+      } else {
+        $sak_b_count++;
+        '<AWS_SECRET_ACCESS_KEY>';
+      }
+    }ge;
+    if ($sak_b_count > 0) {
+      $rules{aws_secret_access_key} += $sak_b_count;
+      $changed += $sak_b_count;
     }
   }
 

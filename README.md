@@ -33,6 +33,7 @@ Claude CodeのprojectごとのJSONL履歴に対して、token・APIキー・DB c
 - Anthropic keys (`sk-ant-api03-…`)
 - Stripe keys (`sk_live_…`, `rk_live_…`, `sk_test_…`)
 - AWS access key IDs (`AKIA…`, `ASIA…`)
+- AWS secret access keys — `aws_secret_access_key` 等のラベルが付いた40文字 base64-ish値、または `AKIA`/`ASIA` と同一行に並ぶ40文字 base64-ish 値（SHA1 hex は除外）
 - Google API keys (`AIza…`)
 - Slack tokens (`xoxb-…` 系)
 - JWT (`eyJ…` 3-part)
@@ -113,6 +114,15 @@ scripts/redact-claude-history-secrets.sh --project-name 'my-project' --apply
 scripts/redact-claude-history-secrets.sh --project-name 'my-project' --latest 20 --dry-run
 scripts/redact-claude-history-secrets.sh --apply --mode drop-line
 ```
+
+定期 sweep（直近n日の全履歴をdry-runで点検）:
+
+```bash
+scripts/redact-claude-history-secrets.sh --dry-run --all --since-days 7
+scripts/redact-claude-history-secrets.sh --apply   --all --since-days 7
+```
+
+Stop hookはセッション直後のlocalな掃除なので、 hookで取りこぼした古い履歴を週次などで sweep する用途を想定しています。
 
 | `--mode` | 動作 |
 | --- | --- |
