@@ -10,6 +10,12 @@ const SCRIPT = join(
   "scripts",
   "redact-claude-history-secrets.sh",
 );
+const AUDIT = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "scripts",
+  "audit-claude-history-for-project.sh",
+);
 
 /**
  * A single redaction expectation. `input` is the raw line content fed through
@@ -140,3 +146,61 @@ runSuite("Provider secrets", [
   // Negative: an ordinary URL with no credentials must pass through untouched.
   { name: "negative-plain-url", input: "docs https://example.com/path?ref=main no secret here", contains: ["https://example.com/path?ref=main"], absent: ["<DB_CREDENTIALS>"] },
 ]);
+
+/**
+ * Runs the read-only audit script over the given lines and returns the
+ * `summary.<rule>=<n>` counts it prints. Used to guard that audit detects the
+ * same secret categories as redact (it historically detected fewer).
+ */
+function auditSummary(lines: string[]): Record<string, number> {
+  const root = mkdtempSync(join(tmpdir(), "audit-test-"));
+  try {
+    const dir = join(root, "projects", "suite");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "cases.jsonl"),
+      lines.map((t, i) => JSON.stringify({ case: `c${i}`, text: t })).join("\n") + "\n",
+    );
+    const proc = Bun.spawnSync(["bash", AUDIT, "--config-dir", root, "--all", "--summary-only"]);
+    if (proc.exitCode !== 0) {
+      throw new Error(`audit exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    }
+    const counts: Record<string, number> = {};
+    for (const m of proc.stdout.toString().matchAll(/^summary\.([a-z_]+)=(\d+)$/gm)) {
+      counts[m[1]] = Number(m[2]);
+    }
+    return counts;
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+describe("Audit detects the same secret categories as redact", () => {
+  // These categories were missing from audit before parity: google, slack, jwt,
+  // aws_secret_access_key, the ASIA id variant, and stripe test/rk keys.
+  const ASIA = "ASIA" + "EXAMPLE" + "000000000";
+  let s: Record<string, number>;
+  beforeAll(() => {
+    s = auditSummary([
+      `maps AIza${E}_${E}_${E}_${E}_000 end`,
+      `slack xoxb-${E}-${E}-${E}-00`,
+      `auth ${JWT}`,
+      `aws_secret_access_key=${SAK}`,
+      `export AWS_ACCESS_KEY_ID=${ASIA}`,
+      `STRIPE_SECRET=sk_test_${E}${E}${E}0`,
+    ]);
+  });
+
+  for (const rule of [
+    "google_api_key",
+    "slack_token",
+    "jwt",
+    "aws_secret_access_key",
+    "aws_access_key_id",
+    "stripe_key",
+  ]) {
+    it(rule, () => {
+      expect(s[rule] ?? 0).toBeGreaterThan(0);
+    });
+  }
+});

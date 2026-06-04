@@ -323,32 +323,79 @@ sub display_text {
   return $text;
 }
 
-sub preview_text {
-  my ($line) = @_;
-  chomp $line;
-  $line = display_text($line);
-  $line =~ s/\bgithub_pat_[A-Za-z0-9_]{20,}\b/<GITHUB_FINE_GRAINED_TOKEN>/g;
-  $line =~ s/\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{20,}\b/<GITHUB_TOKEN>/g;
-  $line =~ s/\bsk-proj-[A-Za-z0-9_-]{20,}\b/<OPENAI_KEY>/g;
-  $line =~ s/\bsk-[A-Za-z0-9]{20,}\b/<OPENAI_KEY>/g;
-  $line =~ s/\bsk-ant-api03-[A-Za-z0-9_-]{20,}\b/<ANTHROPIC_KEY>/g;
-  $line =~ s/\bsk_live_[A-Za-z0-9_-]{20,}\b/<STRIPE_KEY>/g;
-  $line =~ s/\bAKIA[0-9A-Z]{16}\b/<AWS_ACCESS_KEY_ID>/g;
-  $line =~ s#\b((?:postgres|postgresql|mysql|mongodb(?:\+srv)?|redis)://)[^/\s:@]+:[^@\s/]+@#$1<DB_CREDENTIALS>\@#g;
-  $line =~ s/-----BEGIN (?:RSA |EC |OPENSSH |)?PRIVATE KEY-----.*?-----END (?:RSA |EC |OPENSSH |)?PRIVATE KEY-----/<PRIVATE_KEY_BLOCK>/g;
-  return length($line) > 500 ? substr($line, 0, 500) . "..." : $line;
-}
-
-my @rules = (
-  ["github tokens", qr/\b(?:github_pat_[A-Za-z0-9_]{20,}|(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{20,})\b/],
-  ["openai keys", qr/\b(?:sk-proj-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9]{20,})\b/],
-  ["anthropic keys", qr/\bsk-ant-api03-[A-Za-z0-9_-]{20,}\b/],
-  ["stripe live keys", qr/\bsk_live_[A-Za-z0-9_-]{20,}\b/],
-  ["aws access key ids", qr/\bAKIA[0-9A-Z]{16}\b/],
-  ["private key blocks", qr/BEGIN (?:RSA |EC |OPENSSH |)?PRIVATE KEY/],
-  ["database urls", qr#\b(?:postgres|postgresql|mysql|mongodb(?:\+srv)?|redis)://[^/\s:@]+:[^@\s/]+@#],
-  ["pipelock blocked", qr/pipelock: blocked|permissionDecisionReason/],
+# Secret detection mirrors scripts/redact-claude-history-secrets.sh exactly. One
+# pass produces both the per-rule match counts and a redacted copy used for the
+# preview, so counting and preview share a single definition (no internal drift,
+# and the preview can never print a secret the counter knows about).
+my @replacements = (
+  [github_fine_grained_token => qr/\bgithub_pat_[A-Za-z0-9_]{20,}\b/, '<GITHUB_FINE_GRAINED_TOKEN>'],
+  [github_token => qr/\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{20,}\b/, '<GITHUB_TOKEN>'],
+  [anthropic_key => qr/\bsk-ant-api03-[A-Za-z0-9_-]{20,}\b/, '<ANTHROPIC_KEY>'],
+  [openai_project_key => qr/\bsk-proj-[A-Za-z0-9_-]{20,}\b/, '<OPENAI_KEY>'],
+  [openai_key => qr/\bsk-[A-Za-z0-9]{32,}\b/, '<OPENAI_KEY>'],
+  [stripe_key => qr/\b[rs]k_(?:live|test)_[A-Za-z0-9]{20,}\b/, '<STRIPE_KEY>'],
+  [aws_access_key_id => qr/\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/, '<AWS_ACCESS_KEY_ID>'],
+  [google_api_key => qr/\bAIza[0-9A-Za-z_-]{35}\b/, '<GOOGLE_API_KEY>'],
+  [slack_token => qr/\bxox[baprs]-[0-9A-Za-z-]{20,}\b/, '<SLACK_TOKEN>'],
+  [jwt => qr/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/, '<JWT>'],
+  [private_key_block => qr/-----BEGIN (?:RSA |EC |OPENSSH |DSA |)?PRIVATE KEY-----.*?-----END (?:RSA |EC |OPENSSH |DSA |)?PRIVATE KEY-----/, '<PRIVATE_KEY_BLOCK>'],
 );
+
+# Non-secret operational markers, audit-only. Counted but never redacted.
+my @marker_rules = (
+  [pipelock_blocked => qr/pipelock: blocked|permissionDecisionReason/],
+);
+
+# Stable output order for both per-file and summary lines.
+my @rule_order = qw(
+  github_token github_fine_grained_token openai_key openai_project_key
+  anthropic_key stripe_key aws_access_key_id aws_secret_access_key
+  google_api_key slack_token jwt database_url_credentials private_key_block
+  pipelock_blocked
+);
+
+sub scan_line {
+  my ($line) = @_;
+  my %counts;
+  my $had_aws_access_key_id = ($line =~ /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/);
+
+  for my $rule (@replacements) {
+    my ($name, $regex, $replacement) = @$rule;
+    my $count = 0;
+    $line =~ s/$regex/$count++; $replacement/ge;
+    $counts{$name} += $count if $count > 0;
+  }
+
+  my $sak_a = 0;
+  $line =~ s{(\b(?:aws[_-]?secret[_-]?access[_-]?key|aws[_-]?secret[_-]?key)\b[\s"':=\\]{1,8})([A-Za-z0-9/+]{40})(?![A-Za-z0-9/+=])}{
+    $sak_a++;
+    "$1<AWS_SECRET_ACCESS_KEY>";
+  }gei;
+  $counts{aws_secret_access_key} += $sak_a if $sak_a > 0;
+
+  if ($had_aws_access_key_id) {
+    my $sak_b = 0;
+    $line =~ s{(?<![A-Za-z0-9/+])([A-Za-z0-9/+]{40})(?![A-Za-z0-9/+=])}{
+      my $cand = $1;
+      if ($cand =~ /^[a-f0-9]{40}$/) { $cand; }
+      else { $sak_b++; '<AWS_SECRET_ACCESS_KEY>'; }
+    }ge;
+    $counts{aws_secret_access_key} += $sak_b if $sak_b > 0;
+  }
+
+  my $db = 0;
+  $line =~ s#\b((?:postgres|postgresql|mysql|mongodb(?:\+srv)?|redis)://)[^/\s:@]+:[^@\s/]+@#$db++; "$1<DB_CREDENTIALS>\@"#ge;
+  $counts{database_url_credentials} += $db if $db > 0;
+
+  for my $rule (@marker_rules) {
+    my ($name, $regex) = @$rule;
+    my $count = 0;
+    $count++ while $line =~ /$regex/g;
+    $counts{$name} += $count if $count > 0;
+  }
+
+  return ($line, \%counts);
+}
 
 open my $cfh, "<", $candidate_file or die "open $candidate_file: $!";
 my @files = grep { chomp; $_ ne "" } <$cfh>;
@@ -373,27 +420,23 @@ for my $file (@files) {
   my $lines = 0;
   my $line_no = 0;
 
-  while (my $line = <$fh>) {
+  while (my $raw = <$fh>) {
     $line_no++;
     $lines++;
     $total_lines++;
 
+    my ($redacted, $line_counts) = scan_line($raw);
     my $line_matches = 0;
-    for my $rule (@rules) {
-      my ($label, $regex) = @$rule;
-      my $count = 0;
-      while ($line =~ /$regex/g) {
-        $count++;
-      }
-      if ($count > 0) {
-        $counts{$label} += $count;
-        $total_counts{$label} += $count;
-        $line_matches += $count;
-      }
+    for my $name (keys %$line_counts) {
+      $counts{$name} += $line_counts->{$name};
+      $total_counts{$name} += $line_counts->{$name};
+      $line_matches += $line_counts->{$name};
     }
 
     if (!$summary_only && $line_matches > 0 && @previews < $preview_limit) {
-      push @previews, $line_no . ":" . preview_text($line);
+      chomp(my $p = display_text($redacted));
+      $p = substr($p, 0, 500) . "..." if length($p) > 500;
+      push @previews, "$line_no:$p";
     }
   }
   close $fh;
@@ -406,9 +449,8 @@ for my $file (@files) {
 
   print "== " . display_text($file) . "\n";
   print "lines: $lines\n";
-  for my $rule (@rules) {
-    my ($label) = @$rule;
-    printf "%-26s %s\n", "$label:", ($counts{$label} // 0);
+  for my $name (@rule_order) {
+    printf "%-28s %s\n", "$name:", ($counts{$name} // 0);
   }
 
   print "redacted matching lines:\n";
@@ -417,10 +459,7 @@ for my $file (@files) {
 }
 
 print "summary files_seen=$files_seen files_with_findings=$files_with_findings lines_seen=$total_lines\n";
-for my $rule (@rules) {
-  my ($label) = @$rule;
-  my $key = $label;
-  $key =~ s/ /_/g;
-  print "summary.$key=" . ($total_counts{$label} // 0) . "\n";
+for my $name (@rule_order) {
+  print "summary.$name=" . ($total_counts{$name} // 0) . "\n";
 }
 PERL
