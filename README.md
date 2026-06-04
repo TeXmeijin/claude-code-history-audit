@@ -23,6 +23,10 @@ Claude CodeのprojectごとのJSONL履歴に対して、token・APIキー・DB c
 
 ファイルを書き換えるのは `redact` 側だけです。`audit` 側は読み取りのみです。
 
+## Agent Skill（任意）
+
+会話から呼べる Claude Code skill を同梱しています（[.claude/skills/claude-history-audit/SKILL.md](.claude/skills/claude-history-audit/SKILL.md)）。このリポジトリを clone した状態で「履歴を監査して」「履歴を掃除して」などと話しかけると発動します。**監査 / プレビュー / 適用 / 一掃点検 / hook設置** のモードに分かれ、破壊的な「適用」はユーザーの明示承認を得てから実行する設計です。
+
 ## 検出対象
 
 `audit` と `redact` で共通の検出セットです（同じ正規表現を使います）。文脈に依存せずパターンで判定するので、ログ・コマンド出力・toolリクエスト・toolレスポンスのいずれに含まれていてもhitします。`audit` 側はこれに加えて、pipelock/permission拒否などの運用マーカーの件数も表示します（secretではありません）。
