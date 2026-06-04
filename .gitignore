@@ -1,4 +1,6 @@
-.claude/
+# Ignore local Claude settings, but ship the distributable skill.
+.claude/*
+!.claude/skills/
 .DS_Store
 node_modules/
 
