@@ -25,7 +25,7 @@ Claude CodeのprojectごとのJSONL履歴に対して、token・APIキー・DB c
 
 ## 検出対象
 
-両スクリプトで共通する正規表現です。文脈に依存せずパターンで判定するので、ログ・コマンド出力・toolリクエスト・toolレスポンスのいずれに含まれていてもhitします。
+`audit` と `redact` で共通の検出セットです（同じ正規表現を使います）。文脈に依存せずパターンで判定するので、ログ・コマンド出力・toolリクエスト・toolレスポンスのいずれに含まれていてもhitします。`audit` 側はこれに加えて、pipelock/permission拒否などの運用マーカーの件数も表示します（secretではありません）。
 
 - GitHub classic PAT (`ghp_…`, `gho_…`, `ghu_…`, `ghs_…`, `ghr_…`)
 - GitHub fine-grained PAT (`github_pat_…`)
@@ -63,7 +63,9 @@ Claude CodeのprojectごとのJSONL履歴に対して、token・APIキー・DB c
 | `--since-days <n>` | 直近n日以内に更新されたものだけ |
 | `--summary-only` | 詳細行を出さずsecret種別ごとの合計だけ出力 |
 
-`--project-name` を渡すと、stdoutに「どの `projects/*` ディレクトリにヒットしたか」が表示されます。`--apply` 前に対象範囲を確認できます。
+`--project-name` の値は、`~/.claude/projects/` 直下の**ディレクトリ名に対する正規表現（部分一致）**です。各ディレクトリ名はプロジェクトの絶対パスを符号化したもの（`/` などが `-` に置換される）なので、普段は**リポジトリのフォルダ名をそのまま渡せば**当たります。候補は `ls ~/.claude/projects/` で確認できます。`--project-name` を渡すと、stdoutに「どの `projects/*` ディレクトリにヒットしたか」が表示されるので、`--apply` 前に対象範囲を確認できます。
+
+なお、対象プロジェクトに `cd` して引数なしで実行すれば、`--target`（デフォルト `pwd`）が効くので project-name を指定しなくても今いるプロジェクトの履歴を対象にできます（最短の試し方）。
 
 ## Audit
 
